@@ -694,8 +694,8 @@ async def main():
         # Initialize database
         init_db()
         
-        # Add default mandatory channel
-        BotDatabase.add_mandatory_channel("@Ili8_8ill", "@Ili8_8ill")
+        # Remove default mandatory channel setup
+        # BotDatabase.add_mandatory_channel("@Ili8_8ill", "@Ili8_8ill")
         
         # Create bot instance
         bot = TelegramBot()
