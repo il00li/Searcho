@@ -14,10 +14,10 @@ import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
-# Configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8496475334:AAFVBYMsb_d_K80YkD06V3ZlcASS2jzV0uQ")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "7251748706"))
-PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "51444506-bffefcaf12816bd85a20222d1")
+# Configuration - Environment variables embedded for Render deployment
+BOT_TOKEN = "8496475334:AAFVBYMsb_d_K80YkD06V3ZlcASS2jzV0uQ"
+ADMIN_ID = 7251748706
+PIXABAY_API_KEY = "51444506-bffefcaf12816bd85a20222d1"
 
 # Setup logging
 logging.basicConfig(
