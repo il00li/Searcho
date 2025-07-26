@@ -39,7 +39,7 @@ def save_config(cfg):
 
 config = load_config()
 
-BOT_TOKEN       = '8247037355:AAH2rRm9PJCXqcVISS8g-EL1lv3tvQTXFys'
+BOT_TOKEN       = '8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo'
 PIXABAY_API_KEY = '51444506-bffefcaf12816bd85a20222d1'
 ADMIN_ID        = 7251748706
 
