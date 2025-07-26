@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -709,67 +710,29 @@ class TelegramBot:
         # Message handler for search queries
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_search_query))
 
-async def stop_all_bot_instances():
-    """Stop any existing bot instances to prevent conflicts"""
-    try:
-        bot = Bot(token=BOT_TOKEN)
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Cleared any existing webhook")
-    except Exception as e:
-        logger.info(f"No webhook to clear: {e}")
-
-async def async_main():
-    """Main async function"""
+def main():
+    """Main function"""
     try:
         # Initialize database
         init_db()
         
-        # Stop any existing instances first
-        await stop_all_bot_instances()
-        
         # Create bot instance
         bot = TelegramBot()
         
-        # Create application with improved settings
-        bot.application = (
-            Application.builder()
-            .token(BOT_TOKEN)
-            .concurrent_updates(True)
-            .connection_pool_size(8)
-            .pool_timeout(30.0)
-            .read_timeout(30.0)
-            .write_timeout(30.0)
-            .connect_timeout(30.0)
-            .build()
-        )
+        # Create application with simplified settings
+        bot.application = Application.builder().token(BOT_TOKEN).build()
         
         # Setup handlers
         bot.setup_handlers()
         
         logger.info("Starting bot...")
         
-        # Start polling with improved error handling
-        await bot.application.run_polling(
+        # Start polling - use the synchronous method
+        bot.application.run_polling(
             allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            close_loop=False,
-            stop_signals=None
+            drop_pending_updates=True
         )
         
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except telegram.error.Conflict as e:
-        logger.error(f"Bot conflict error: {e}")
-        logger.error("Another instance of the bot might be running. Please stop it first.")
-        exit(1)
-    except Exception as e:
-        logger.error(f"Error running bot: {e}")
-        raise
-
-def main():
-    """Main function wrapper"""
-    try:
-        asyncio.run(async_main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
