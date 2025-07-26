@@ -1,7 +1,9 @@
 import os
-import json
 import io
+import json
+import logging
 import requests
+
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -11,37 +13,28 @@ from telegram import (
 )
 from telegram.ext import (
     Updater,
+    CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
     Filters,
     CallbackContext
 )
 
-CONFIG_PATH = 'config.json'
+# ------------[ config + constants ]------------
 
-def load_config():
-    if not os.path.exists(CONFIG_PATH):
-        cfg = {
-            "banned": {},                # محظورون: {user_id: username}
-            "channels": ["@crazys7"],
-            "users": [],                 # كافة المستخدمين
-            "searches": 0                # عدد عمليات البحث
-        }
-        save_config(cfg)
-    else:
-        with open(CONFIG_PATH, 'r') as f:
-            cfg = json.load(f)
-    return cfg
+CONFIG_PATH      = 'config.json'
+BOT_TOKEN        = '8496475334:AAFVBYMsb_d_K80YkD06V3ZlcASS2jzV0uQ'
+PIXABAY_API_KEY  = '51444506-bffefcaf12816bd85a20222d1'
+ADMIN_ID         = 7251748706
 
-def save_config(cfg):
-    with open(CONFIG_PATH, 'w') as f:
-        json.dump(cfg, f, ensure_ascii=False)
-
-config = load_config()
-
-BOT_TOKEN       = '8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo'
-PIXABAY_API_KEY = '51444506-bffefcaf12816bd85a20222d1'
-ADMIN_ID        = 7251748706
+SEARCH_TYPES = [
+    ('vector',       'Vectors'),
+    ('illustration', 'Illustrations'),
+    ('video',        'Video'),
+    ('photo',        'Photos'),
+    ('music',        'Music'),
+    ('gif',          'GIF'),
+]
 
 SUBSCRIBE_ART = (
     "(•_•)\n"
@@ -49,6 +42,7 @@ SUBSCRIBE_ART = (
     " /   \\\n"
     "🎧 | اشترك في القنوات أولاً:"
 )
+
 READY_ART = (
     "(⊙_☉)\n"
     " /|\\\n"
@@ -56,14 +50,31 @@ READY_ART = (
     "هل تريد بدء بحث؟!"
 )
 
-SEARCH_TYPES = [
-    ('illustration', 'Illustration'),
-    ('photo',        'Photos'),
-    ('video',        'Video'),
-    ('gif',          'GIF')
-]
+# default structure for persistence
+DEFAULT_CFG = {
+    "banned":   {},           # { user_id: username }
+    "channels": ["@Ili8_8ill"],
+    "users":    [],           # كل مستخدم مر عليه البوت
+    "searches": 0             # عدّاد عمليات البحث
+}
 
-# Helpers
+# -------------[ load / save config ]-------------
+
+def load_config():
+    if not os.path.exists(CONFIG_PATH):
+        cfg = DEFAULT_CFG.copy()
+        save_config(cfg)
+        return cfg
+    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_config(cfg):
+    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+config = load_config()
+
+# ---------------[ helpers ]---------------
 
 def is_banned(user_id):
     return str(user_id) in config['banned']
@@ -76,58 +87,25 @@ def add_user(user_id):
 def is_subscribed(user_id, bot):
     for ch in config['channels']:
         try:
-            status = bot.get_chat_member(chat_id=ch, user_id=user_id).status
-            if status not in ['member', 'administrator', 'creator']:
+            st = bot.get_chat_member(chat_id=ch, user_id=user_id).status
+            if st not in ['member', 'creator', 'administrator']:
                 return False
         except:
             return False
     return True
 
 def download_file(url):
-    r = requests.get(url, stream=True)
-    if r.status_code == 200:
-        bio = io.BytesIO(r.content)
+    resp = requests.get(url, stream=True)
+    if resp.status_code == 200:
+        bio = io.BytesIO(resp.content)
         bio.name = url.split("/")[-1]
         return bio
     return None
 
-# -- Inline Menus --
-
-def show_main_menu(chat_id, bot, is_admin=False):
-    btns = [
-        [InlineKeyboardButton("بدء البحث 🎧", callback_data='start_search')],
-        [InlineKeyboardButton("نوع البحث 💐", callback_data='search_type')]
-    ]
-    if is_admin:
-        btns.append([InlineKeyboardButton("لوحة التحكم 🛠️", callback_data='admin_panel')])
-    bot.send_message(chat_id, READY_ART, reply_markup=InlineKeyboardMarkup(btns))
-
-def show_search_types(query):
-    sel = query._bot_data.setdefault(query.from_user.id, {}).get('search_type', '')
-    btns = []
-    for dtype, label in SEARCH_TYPES:
-        mark = '👻' if sel == dtype else ''
-        btns.append([InlineKeyboardButton(f"{mark} {label}", callback_data=f"type_{dtype}")])
-    btns.append([InlineKeyboardButton("رجوع 🏠", callback_data='main_menu')])
-    query.edit_message_text("💐 اختر نوع البحث:", reply_markup=InlineKeyboardMarkup(btns))
-
-def show_admin_panel(query):
-    btns = [
-        [InlineKeyboardButton("حظر مستخدم 🚫",    callback_data='admin_ban')],
-        [InlineKeyboardButton("رفع حظر ✅",       callback_data='admin_unban')],
-        [InlineKeyboardButton("تعيين قناة 📢",   callback_data='admin_set_channel')],
-        [InlineKeyboardButton("إلغاء قناة ❎",    callback_data='admin_unset_channel')],
-        [InlineKeyboardButton("إحصائيات 📊",      callback_data='admin_stats')],
-        [InlineKeyboardButton("إرسال إشعار 📣",   callback_data='admin_notify')],
-        [InlineKeyboardButton("رجوع 🏠",          callback_data='main_menu')]
-    ]
-    query.edit_message_text("🛠️ لوحة التحكم:", reply_markup=InlineKeyboardMarkup(btns))
-
-# -- Handlers --
+# --------------[ command handlers ]--------------
 
 def start(update: Update, context: CallbackContext):
-    user = update.effective_user
-    user_id = user.id
+    user_id = update.effective_user.id
 
     if is_banned(user_id):
         update.message.reply_text("🚫 أنت محظور من استخدام البوت.")
@@ -137,169 +115,240 @@ def start(update: Update, context: CallbackContext):
     bot = context.bot
 
     if not is_subscribed(user_id, bot):
-        btns = [[InlineKeyboardButton(ch, url=f"https://t.me/{ch.strip('@')}")]
-                for ch in config['channels']]
-        btns.append([InlineKeyboardButton("تحقق | Verify", callback_data='verify')])
-        update.message.reply_text(SUBSCRIBE_ART, reply_markup=InlineKeyboardMarkup(btns))
+        # menu اشتراك
+        buttons = [
+            [InlineKeyboardButton(ch, url=f"https://t.me/{ch.strip('@')}")]
+            for ch in config['channels']
+        ]
+        buttons.append([InlineKeyboardButton("تحقق | Verify", callback_data='verify')])
+        update.message.reply_text(
+            SUBSCRIBE_ART,
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
     else:
-        show_main_menu(update.message.chat_id, bot, is_admin=(user_id==ADMIN_ID))
+        send_ready_menu(update.message.chat.id, user_id, bot)
 
-def button_handler(update: Update, context: CallbackContext):
-    query = update.callback_query
-    user_id = query.from_user.id
-    data = query.data
+def send_ready_menu(chat_id, user_id, bot):
+    buttons = [
+        [InlineKeyboardButton("بدء البحث 🎧", callback_data='start_search')],
+        [InlineKeyboardButton("نوع البحث 💐", callback_data='search_type')]
+    ]
+    if user_id == ADMIN_ID:
+        buttons.append([InlineKeyboardButton("لوحة التحكم 🛠️", callback_data='admin_panel')])
+    bot.send_message(
+        chat_id,
+        READY_ART,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+# ------------[ inline callback handler ]------------
+
+def on_callback(update: Update, context: CallbackContext):
+    query   = update.callback_query
+    data    = query.data
+    uid     = query.from_user.id
+    bot     = context.bot
     query.answer()
 
-    if is_banned(user_id):
+    if is_banned(uid):
         query.edit_message_text("🚫 أنت محظور.")
         return
 
-    # Verify subscription
+    # تحقق من اشتراك القنوات
     if data == 'verify':
-        if is_subscribed(user_id, context.bot):
-            start(update, context)
+        if is_subscribed(uid, bot):
+            send_ready_menu(query.message.chat.id, uid, bot)
         else:
             query.edit_message_text("⚠️ لم تشترك بعد.")
         return
 
-    # Main menu
+    # القائمة الرئيسية
     if data == 'main_menu':
-        show_main_menu(query.message.chat_id, context.bot, is_admin=(user_id==ADMIN_ID))
+        send_ready_menu(query.message.chat.id, uid, bot)
         return
 
-    # Search flow
+    # بدء إدخال نص البحث
     if data == 'start_search':
+        context.user_data.clear()
         context.user_data['awaiting'] = True
         query.edit_message_text("✏️ أرسل كلمات البحث:")
         return
 
+    # اختر نوع البحث
     if data == 'search_type':
-        show_search_types(query)
+        show_type_menu(query, context)
         return
 
+    # ضبط النوع المختار
     if data.startswith('type_'):
-        dtype = data.split('_',1)[1]
-        context.user_data['search_type'] = dtype
-        show_search_types(query)
+        _, t = data.split('_', 1)
+        context.user_data['search_type'] = t
+        show_type_menu(query, context)
         return
 
-    # Navigation in results
-    if data in ['next','prev','select']:
-        handle_navigation(query, context, data)
+    # لوحة التحكم (للمدير)
+    if uid == ADMIN_ID and data == 'admin_panel':
+        show_admin_menu(query)
         return
 
-    # Admin panel
-    if user_id == ADMIN_ID and data == 'admin_panel':
-        show_admin_panel(query)
+    # إجراءات admin
+    if uid == ADMIN_ID and data.startswith('admin_'):
+        act = data.split('_', 1)[1]
+        context.user_data['admin_action'] = act
+        if act == 'stats':
+            show_stats(query)
+        else:
+            prompts = {
+                'ban':  "✏️ أرسل: user_id username",
+                'unban':"✏️ أرسل: user_id",
+                'setchn': "✏️ أرسل: @channel",
+                'unsetchn':"✏️ أرسل: @channel",
+                'notify': "✏️ أرسل نص الإشعار:"
+            }
+            query.edit_message_text(prompts[act])
         return
 
-    # Admin actions
-    if user_id == ADMIN_ID and data.startswith('admin_'):
-        action = data.split('_',1)[1]
-        context.user_data['admin_action'] = action
-        prompts = {
-            'ban':        "✏️ أرسل: user_id username",
-            'unban':      "✏️ أرسل: user_id",
-            'set_channel':   "✏️ أرسل: @channel_username",
-            'unset_channel': "✏️ أرسل: @channel_username",
-            'notify':     "✏️ أرسل نص الإشعار:"
-        }
-        query.edit_message_text(prompts[action])
+    # تنقل أو اختيار وسط النتائج
+    if data in ['next', 'prev', 'select']:
+        navigate_results(query, context, data)
         return
 
-def text_handler(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
+# -------------[ show menus ]-------------
+
+def show_type_menu(query, context):
+    chosen = context.user_data.get('search_type','')
+    buttons = []
+    for value, label in SEARCH_TYPES:
+        mark = '👻' if chosen == value else ''
+        buttons.append([InlineKeyboardButton(f"{mark} {label}", callback_data=f"type_{value}")])
+    buttons.append([InlineKeyboardButton("بدء البحث 🎧", callback_data='start_search')])
+    buttons.append([InlineKeyboardButton("رجوع 🏠", callback_data='main_menu')])
+    query.edit_message_text("💐 اختر نوع البحث:", reply_markup=InlineKeyboardMarkup(buttons))
+
+def show_admin_menu(query):
+    btns = [
+        [InlineKeyboardButton("حظر مستخدم 🚫",    callback_data='admin_ban')],
+        [InlineKeyboardButton("رفع حظر ✅",       callback_data='admin_unban')],
+        [InlineKeyboardButton("تعيين قناة 📢",   callback_data='admin_setchn')],
+        [InlineKeyboardButton("إلغاء قناة ❎",    callback_data='admin_unsetchn')],
+        [InlineKeyboardButton("إحصائيات 📊",      callback_data='admin_stats')],
+        [InlineKeyboardButton("إرسال إشعار 📣",   callback_data='admin_notify')],
+        [InlineKeyboardButton("رجوع 🏠",          callback_data='main_menu')]
+    ]
+    query.edit_message_text("🛠️ لوحة التحكم:", reply_markup=InlineKeyboardMarkup(btns))
+
+def show_stats(query):
+    u = len(config['users'])
+    s = config['searches']
+    c = len(config['channels'])
+    text = f"🧍 المستخدمين: {u}\n🔍 طلبات البحث: {s}\n📢 قنوات الإشتراك: {c}"
+    query.edit_message_text(text)
+
+# ------------[ text handler ]------------
+
+def on_text(update: Update, context: CallbackContext):
+    uid  = update.effective_user.id
     text = update.message.text.strip()
 
-    # Admin text actions
+    # admin actions via text
     action = context.user_data.get('admin_action')
-    if user_id == ADMIN_ID and action:
-        cfg = config
+    if uid == ADMIN_ID and action:
         if action == 'ban':
-            parts = text.split(None, 1)
-            if len(parts) == 2:
-                uid, uname = parts
-                cfg['banned'][uid] = uname
-                save_config(cfg)
-                update.message.reply_text(f"🚫 تم حظر {uname}")
-        elif action == 'unban':
-            uid = text
-            if uid in cfg['banned']:
-                name = cfg['banned'].pop(uid)
-                save_config(cfg)
+            parts = text.split(None,1)
+            if len(parts)==2:
+                config['banned'][parts[0]] = parts[1]
+                save_config(config)
+                update.message.reply_text(f"🚫 تم حظر {parts[1]}")
+        if action == 'unban':
+            if text in config['banned']:
+                name = config['banned'].pop(text)
+                save_config(config)
                 update.message.reply_text(f"✅ تم رفع الحظر عن {name}")
-        elif action == 'set_channel':
-            ch = text
-            if ch not in cfg['channels']:
-                cfg['channels'].append(ch)
-                save_config(cfg)
-                update.message.reply_text(f"✅ تمت إضافة القناة {ch}")
-        elif action == 'unset_channel':
-            ch = text
-            if ch in cfg['channels']:
-                cfg['channels'].remove(ch)
-                save_config(cfg)
-                update.message.reply_text(f"❎ تمت إزالة القناة {ch}")
-        elif action == 'notify':
+        if action == 'setchn':
+            if text not in config['channels']:
+                config['channels'].append(text)
+                save_config(config)
+                update.message.reply_text(f"✅ تمت إضافة القناة {text}")
+        if action == 'unsetchn':
+            if text in config['channels']:
+                config['channels'].remove(text)
+                save_config(config)
+                update.message.reply_text(f"❎ تمت إزالة القناة {text}")
+        if action == 'notify':
             sent = 0
-            for uid in cfg['users']:
-                if str(uid) not in cfg['banned']:
+            for u in config['users']:
+                if str(u) not in config['banned']:
                     try:
-                        context.bot.send_message(chat_id=uid, text=text)
+                        context.bot.send_message(chat_id=u, text=text)
                         sent += 1
                     except:
                         pass
             update.message.reply_text(f"📨 تم الإرسال إلى {sent} مستخدم")
         context.user_data.pop('admin_action', None)
-        # العودة للوحة التحكم
-        show_main_menu(update.message.chat_id, context.bot, is_admin=True)
+        show_admin_menu(update.callback_query or update, context)
         return
 
-    # User search
+    # user search text
     if not context.user_data.get('awaiting'):
         return
-
     context.user_data['awaiting'] = False
-    query_text = text
-    hits_all = []
-    page = 1
 
-    # جلب حتى 100 نتيجة
-    while len(hits_all) < 100:
+    query_text = text
+    dtype      = context.user_data.get('search_type','photo')
+    all_hits   = []
+    page       = 1
+    endpoint   = 'https://pixabay.com/api/videos/' if dtype in ['video','music','gif'] else 'https://pixabay.com/api/'
+    
+    # جمع حتى 100 نتيجة
+    while len(all_hits) < 100:
         params = {
             'key': PIXABAY_API_KEY,
             'q': query_text,
-            'image_type': context.user_data.get('search_type', 'photo'),
             'per_page': 100,
             'page': page
         }
-        resp = requests.get('https://pixabay.com/api/', params=params).json()
+        if endpoint.endswith('/videos/'):
+            if dtype == 'gif':
+                params['video_type'] = 'animation'
+            if dtype == 'music':
+                params['category'] = 'music'
+        else:
+            params['image_type'] = dtype
+
+        resp = requests.get(endpoint, params=params).json()
         hits = resp.get('hits', [])
         if not hits:
             break
-        hits_all.extend(hits)
+        all_hits.extend(hits)
         if len(hits) < 100:
             break
         page += 1
 
-    results = hits_all[:100]
+    results = all_hits[:100]
     if not results:
         update.message.reply_text("¯\\_(ツ)_/¯\nكلماتك غريبة يا غلام")
         return
 
+    # خزّن النتائج وابدأ العرض
     context.user_data['results'] = results
     context.user_data['idx']     = 0
     config['searches'] += 1
     save_config(config)
-
     send_media(update, context, first=True)
 
-def send_media(update_or_query, context, first=False):
-    chat_id = update_or_query.message.chat.id
-    idx     = context.user_data['idx']
-    item    = context.user_data['results'][idx]
+# ---------[ send & navigate media ]----------
 
-    # Video or photo
+def send_media(upd, context, first=False):
+    # تحديد الدردشة والبيانات
+    if isinstance(upd, Update) and upd.message:
+        chat_id = upd.message.chat.id
+    else:
+        chat_id = upd.callback_query.message.chat.id
+
+    idx  = context.user_data['idx']
+    item = context.user_data['results'][idx]
+
+    # تحميل ملف
     if 'videos' in item:
         url = item['videos']['medium']['url']
         bio = download_file(url)
@@ -309,16 +358,21 @@ def send_media(update_or_query, context, first=False):
         bio = download_file(url)
         media = InputMediaPhoto(media=bio, caption=f"📷 بواسطة {item['user']}")
 
+    # أزرار التنقل والاختيار
     nav = []
     if idx > 0:
         nav.append(InlineKeyboardButton("« السابق", callback_data='prev'))
     if idx < len(context.user_data['results']) - 1:
         nav.append(InlineKeyboardButton("التالي »", callback_data='next'))
-    keyboard = [nav, [InlineKeyboardButton("اختيار🥇", callback_data='select')], 
-                [InlineKeyboardButton("رجوع 🏠", callback_data='main_menu')]]
-    markup = InlineKeyboardMarkup(keyboard)
 
+    buttons = [
+        nav,
+        [InlineKeyboardButton("اختيار🥇", callback_data='select')],
+        [InlineKeyboardButton("رجوع 🏠", callback_data='main_menu')]
+    ]
+    markup = InlineKeyboardMarkup(buttons)
     bot = context.bot
+
     if first:
         if isinstance(media, InputMediaPhoto):
             msg = bot.send_photo(chat_id, photo=bio, caption=media.caption, reply_markup=markup)
@@ -333,7 +387,7 @@ def send_media(update_or_query, context, first=False):
             reply_markup=markup
         )
 
-def handle_navigation(query, context, action):
+def navigate_results(query, context, action):
     if action == 'next':
         context.user_data['idx'] += 1
     elif action == 'prev':
@@ -343,16 +397,16 @@ def handle_navigation(query, context, action):
         return
     send_media(query, context, first=False)
 
-def main():
+# -----------------[ main ]------------------
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    dp.add_handler(CallbackQueryHandler(button_handler))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CallbackQueryHandler(on_callback))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, on_text))
 
-    # يبدأ بوت التليجرام تلقائياً
     updater.start_polling()
     updater.idle()
-
-if __name__ == '__main__':
-    main()
