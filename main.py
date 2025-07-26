@@ -53,7 +53,7 @@ READY_ART = (
 # default structure for persistence
 DEFAULT_CFG = {
     "banned":   {},           # { user_id: username }
-    "channels": ["@Ili8_8ill"],
+    "channels": ["@crazys7"],
     "users":    [],           # كل مستخدم مر عليه البوت
     "searches": 0             # عدّاد عمليات البحث
 }
