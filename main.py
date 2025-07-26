@@ -695,41 +695,60 @@ def main():
         # Initialize database
         init_db()
         
-        # Remove default mandatory channel setup
-        # BotDatabase.add_mandatory_channel("@Ili8_8ill", "@Ili8_8ill")
-        
         # Create bot instance
         bot = TelegramBot()
         
-        # Create application with conflict handling
-        bot.application = Application.builder().token(BOT_TOKEN).build()
+        # Create application with conflict handling and better settings
+        bot.application = (
+            Application.builder()
+            .token(BOT_TOKEN)
+            .concurrent_updates(True)
+            .build()
+        )
         
         # Setup handlers
         bot.setup_handlers()
         
-        logger.info("Bot started successfully!")
+        logger.info("Starting bot...")
         
-        # Start polling with proper error handling for conflicts
-        try:
-            bot.application.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True,  # Drop any pending updates to avoid conflicts
-                poll_interval=1.0,
-                timeout=20
-            )
-        except telegram.error.Conflict:
-            logger.warning("Conflict detected - another bot instance might be running. Stopping...")
-            # Wait a bit and try again
-            import time
-            time.sleep(5)
-            logger.info("Retrying bot startup...")
-            bot.application.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True,
-                poll_interval=1.0,
-                timeout=20
-            )
+        # Start polling with better conflict handling
+        max_retries = 3
+        retry_count = 0
         
+        while retry_count < max_retries:
+            try:
+                logger.info(f"Bot startup attempt {retry_count + 1}/{max_retries}")
+                bot.application.run_polling(
+                    allowed_updates=Update.ALL_TYPES,
+                    drop_pending_updates=True,
+                    poll_interval=2.0,
+                    timeout=30,
+                    bootstrap_retries=3,
+                    read_timeout=30,
+                    write_timeout=30,
+                    connect_timeout=30,
+                    pool_timeout=30
+                )
+                # If we reach here, polling started successfully
+                break
+                
+            except telegram.error.Conflict as e:
+                retry_count += 1
+                logger.warning(f"Conflict detected (attempt {retry_count}): {e}")
+                if retry_count < max_retries:
+                    wait_time = retry_count * 10
+                    logger.info(f"Waiting {wait_time} seconds before retry...")
+                    import time
+                    time.sleep(wait_time)
+                else:
+                    logger.error("Max retries reached. Another bot instance might be running.")
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error during polling: {e}")
+                raise
+        
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Error running bot: {e}")
         raise
