@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
+from telegram.error import Conflict
 
 # Configuration - Environment variables embedded for Render deployment
 BOT_TOKEN = "8496475334:AAFVBYMsb_d_K80YkD06V3ZlcASS2jzV0uQ"
@@ -700,7 +701,7 @@ def main():
         # Create bot instance
         bot = TelegramBot()
         
-        # Create application
+        # Create application with conflict handling
         bot.application = Application.builder().token(BOT_TOKEN).build()
         
         # Setup handlers
@@ -708,8 +709,28 @@ def main():
         
         logger.info("Bot started successfully!")
         
-        # Start polling - this will handle the event loop properly
-        bot.application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Start polling with proper error handling for conflicts
+        try:
+            bot.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,  # Drop any pending updates to avoid conflicts
+                poll_interval=1.0,
+                timeout=20
+            )
+        except telegram.error.Conflict:
+            logger.warning("Conflict detected - another bot instance might be running. Stopping...")
+            if bot.application.updater.running:
+                await bot.application.stop()
+            # Wait a bit and try again
+            import time
+            time.sleep(5)
+            logger.info("Retrying bot startup...")
+            bot.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                poll_interval=1.0,
+                timeout=20
+            )
         
     except Exception as e:
         logger.error(f"Error running bot: {e}")
