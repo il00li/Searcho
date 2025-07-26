@@ -688,7 +688,7 @@ class TelegramBot:
         # Message handler for search queries
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_search_query))
 
-async def main():
+def main():
     """Main function"""
     try:
         # Initialize database
@@ -708,12 +708,12 @@ async def main():
         
         logger.info("Bot started successfully!")
         
-        # Start polling
-        await bot.application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Start polling - this will handle the event loop properly
+        bot.application.run_polling(allowed_updates=Update.ALL_TYPES)
         
     except Exception as e:
         logger.error(f"Error running bot: {e}")
         raise
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
