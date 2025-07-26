@@ -709,20 +709,37 @@ class TelegramBot:
         # Message handler for search queries
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_search_query))
 
+async def stop_all_bot_instances():
+    """Stop any existing bot instances to prevent conflicts"""
+    try:
+        bot = Bot(token=BOT_TOKEN)
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Cleared any existing webhook")
+    except Exception as e:
+        logger.info(f"No webhook to clear: {e}")
+
 def main():
     """Main function"""
     try:
         # Initialize database
         init_db()
         
+        # Stop any existing instances first
+        asyncio.run(stop_all_bot_instances())
+        
         # Create bot instance
         bot = TelegramBot()
         
-        # Create application with conflict handling and better settings
+        # Create application with improved settings
         bot.application = (
             Application.builder()
             .token(BOT_TOKEN)
             .concurrent_updates(True)
+            .connection_pool_size(8)
+            .pool_timeout(30.0)
+            .read_timeout(30.0)
+            .write_timeout(30.0)
+            .connect_timeout(30.0)
             .build()
         )
         
@@ -731,44 +748,20 @@ def main():
         
         logger.info("Starting bot...")
         
-        # Start polling with better conflict handling
-        max_retries = 3
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                logger.info(f"Bot startup attempt {retry_count + 1}/{max_retries}")
-                bot.application.run_polling(
-                    allowed_updates=Update.ALL_TYPES,
-                    drop_pending_updates=True,
-                    poll_interval=2.0,
-                    timeout=30,
-                    bootstrap_retries=3,
-                    read_timeout=30,
-                    write_timeout=30,
-                    connect_timeout=30,
-                    pool_timeout=30
-                )
-                # If we reach here, polling started successfully
-                break
-                
-            except telegram.error.Conflict as e:
-                retry_count += 1
-                logger.warning(f"Conflict detected (attempt {retry_count}): {e}")
-                if retry_count < max_retries:
-                    wait_time = retry_count * 10
-                    logger.info(f"Waiting {wait_time} seconds before retry...")
-                    import time
-                    time.sleep(wait_time)
-                else:
-                    logger.error("Max retries reached. Another bot instance might be running.")
-                    raise
-            except Exception as e:
-                logger.error(f"Unexpected error during polling: {e}")
-                raise
+        # Start polling with improved error handling
+        bot.application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            close_loop=False,
+            stop_signals=None
+        )
         
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
+    except telegram.error.Conflict as e:
+        logger.error(f"Bot conflict error: {e}")
+        logger.error("Another instance of the bot might be running. Please stop it first.")
+        exit(1)
     except Exception as e:
         logger.error(f"Error running bot: {e}")
         raise
