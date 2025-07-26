@@ -719,8 +719,6 @@ def main():
             )
         except telegram.error.Conflict:
             logger.warning("Conflict detected - another bot instance might be running. Stopping...")
-            if bot.application.updater.running:
-                await bot.application.stop()
             # Wait a bit and try again
             import time
             time.sleep(5)
