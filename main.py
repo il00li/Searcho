@@ -669,6 +669,25 @@ class TelegramBot:
         
         await query.edit_message_text(stats_text, reply_markup=reply_markup)
     
+    async def back_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Return to admin panel"""
+        query = update.callback_query
+        await query.answer()
+        
+        if query.from_user.id != ADMIN_ID:
+            await query.answer("❌ غير مصرح لك", show_alert=True)
+            return
+        
+        keyboard = [
+            [InlineKeyboardButton("إحصائيات البوت 📊", callback_data="admin_stats")],
+            [InlineKeyboardButton("إدارة المستخدمين 👥", callback_data="admin_users")],
+            [InlineKeyboardButton("إدارة القنوات 📢", callback_data="admin_channels")],
+            [InlineKeyboardButton("إرسال إشعار 📨", callback_data="admin_broadcast")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("🔧 لوحة تحكم الإدارة:", reply_markup=reply_markup)
+    
     def setup_handlers(self):
         """Setup bot handlers"""
         # Command handlers
@@ -685,6 +704,7 @@ class TelegramBot:
         self.application.add_handler(CallbackQueryHandler(self.select_result, pattern="^select_result_"))
         self.application.add_handler(CallbackQueryHandler(self.back_to_main, pattern="^back_to_main$"))
         self.application.add_handler(CallbackQueryHandler(self.admin_stats, pattern="^admin_stats$"))
+        self.application.add_handler(CallbackQueryHandler(self.back_to_admin, pattern="^back_to_admin$"))
         
         # Message handler for search queries
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_search_query))
