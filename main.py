@@ -16,7 +16,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram.error import Conflict
 
 # Configuration - Environment variables embedded for Render deployment
-BOT_TOKEN = "8496475334:AAFVBYMsb_d_K80YkD06V3ZlcASS2jzV0uQ"
+BOT_TOKEN = "8247037355:AAH2rRm9PJCXqcVISS8g-EL1lv3tvQTXFys"
 ADMIN_ID = 7251748706
 PIXABAY_API_KEY = "51444506-bffefcaf12816bd85a20222d1"
 
