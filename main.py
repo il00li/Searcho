@@ -718,14 +718,14 @@ async def stop_all_bot_instances():
     except Exception as e:
         logger.info(f"No webhook to clear: {e}")
 
-def main():
-    """Main function"""
+async def async_main():
+    """Main async function"""
     try:
         # Initialize database
         init_db()
         
         # Stop any existing instances first
-        asyncio.run(stop_all_bot_instances())
+        await stop_all_bot_instances()
         
         # Create bot instance
         bot = TelegramBot()
@@ -749,7 +749,7 @@ def main():
         logger.info("Starting bot...")
         
         # Start polling with improved error handling
-        bot.application.run_polling(
+        await bot.application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
             close_loop=False,
@@ -762,6 +762,16 @@ def main():
         logger.error(f"Bot conflict error: {e}")
         logger.error("Another instance of the bot might be running. Please stop it first.")
         exit(1)
+    except Exception as e:
+        logger.error(f"Error running bot: {e}")
+        raise
+
+def main():
+    """Main function wrapper"""
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Error running bot: {e}")
         raise
