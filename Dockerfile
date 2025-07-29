@@ -1,15 +1,18 @@
-FROM php:8.2-cli
+# Use official PHP with Apache
+FROM php:8.2-apache
 
-WORKDIR /app
+# تحديد مجلد العمل
+WORKDIR /var/www/html
 
-# تثبيت curl
-RUN apt-get update && apt-get install -y curl
+# نسخ كامل ملفات البوت (index.php، JSON، إلخ)
+COPY . /var/www/html
 
-# نسخ ملفات البوت كاملة
-COPY . /app
+# تثبيت curl (ولأي امتدادات أخرى تحتاجها)
+RUN apt-get update \
+    && apt-get install -y curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# إخطار Render بالمنفذ
-EXPOSE 10000
+# تأكد من فتح المنفذ 80
+EXPOSE 80
 
-# تشغيل PHP Built-in Web Server باستخدام متغير PORT
-CMD ["sh", "-c", "php -S 0.0.0.0:${PORT:-10000} index.php"] 
+# يدير Apache تلقائيًا؛ لا حاجة لأمر CMD إضافي لأن ENTRYPOINT مضمّن
