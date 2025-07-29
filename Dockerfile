@@ -1,11 +1,16 @@
-# استخدام صورة PHP مع Apache
-FROM php:8.2-apache
+FROM php:8.2-cli
 
-# نسخ ملفات المشروع إلى مجلد الاستضافة داخل الحاوية
-COPY . /var/www/html/
+WORKDIR /app
 
-# فتح المنفذ 80 (افتراضي لـ HTTP)
-EXPOSE 80
+# تنصيب curl
+RUN apt-get update && apt-get install -y curl
 
-# تثبيت Composer (اختياري إذا كنت تستخدمه)
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+# نسخ الملفات
+COPY . /app
+
+# تثبيت Composer (اختياري لو تحتاج تحديثات)
+# RUN php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" \
+#     && php composer-setup.php --install-dir=/usr/local/bin --filename=composer \
+#     && rm composer-setup.php
+
+CMD ["php", "bot.php"]
