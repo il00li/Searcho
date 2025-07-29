@@ -23,7 +23,7 @@ TOKEN               = os.environ["8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo
 ADMIN_ID            = int(os.environ["7251748706"])
 PIXABAY_API_KEY     = os.environ["51444506-bffefcaf12816bd85a20222d1"]
 REQUIRED_CHANNELS   = os.environ.get("REQUIRED_CHANNELS", "@crazys7,@AWU87").split(",")
-WEBHOOK_URL         = os.environ.get("WEBHOOK_URL")  # e.g. https://<your-render-app>.onrender.com
+WEBHOOK_URL         = os.environ.get("https://searcho-1.onrender.com")  # e.g. https://<your-render-app>.onrender.com
 PORT                = int(os.environ.get("PORT", "8443"))
 
 
