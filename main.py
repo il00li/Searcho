@@ -1,228 +1,319 @@
 import os
+import logging
 import requests
-from telegram import (
-    Bot,
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InputMediaPhoto,
-    InputMediaVideo,
-)
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Updater,
+    Application,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    Filters,
+    ContextTypes,
+    filters,
 )
-from dotenv import load_dotenv
 
-# 1. تحميل الإعدادات من .env
-load_dotenv()
-BOT_TOKEN       = os.getenv("8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo ")
-ADMIN_ID        = int(os.getenv("7251748706", 0))
-PIXABAY_API_KEY = os.getenv("51444506-bffefcaf12816bd85a20222d1 ")
-CHANNELS        = ["@crazys7", "@AWU87"]
+# Enable logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-if not BOT_TOKEN or not PIXABAY_API_KEY:
-    raise RuntimeError("BOT_TOKEN أو PIXABAY_API_KEY مفقود في المتغيرات البيئية")
-
-# 2. تهيئة البوت والـ Dispatcher
-updater    = Updater(token=BOT_TOKEN, use_context=True)
-dispatcher = updater.dispatcher
-
-# 3. بناء لوحات الأزرار
-def build_channels_keyboard():
-    btns = [
-        InlineKeyboardButton(text=ch, url=f"https://t.me/{ch.lstrip('@')}")
-        for ch in CHANNELS
-    ]
-    btns.append(InlineKeyboardButton(text="تحقق | Check", callback_data="check_sub"))
-    return InlineKeyboardMarkup([btns[:2], btns[2:]])
-
-def build_main_keyboard(search_type=None):
-    type_label = f" انواع البحث 🧸 ({search_type})" if search_type else " انواع البحث 🧸"
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(text="بدء البحث 👁", callback_data="start_search"),
-            InlineKeyboardButton(text=type_label, callback_data="choose_type"),
-        ]
-    ])
-
-def build_type_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(text="photos 🖼️",      callback_data="type:photos"),
-            InlineKeyboardButton(text="illustration 🎨", callback_data="type:illustration"),
-        ],
-        [
-            InlineKeyboardButton(text="vector 📐",       callback_data="type:vector"),
-            InlineKeyboardButton(text="video 🎬",        callback_data="type:video"),
-        ],
-    ])
-
-def build_nav_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("⬅️", callback_data="nav:prev"),
-            InlineKeyboardButton("➡️", callback_data="nav:next"),
-        ],
-        [InlineKeyboardButton("اختيار🔒", callback_data="select")],
-    ])
-
-# 4. /start — عرض القنوات مع زر “تحقق”
-def start(update: Update, context):
-    context.user_data.clear()
-    update.message.reply_text(
-        text="📌 للاشتراك الإجباري في القنوات التالية ثم اضغط تحقق:",
-        reply_markup=build_channels_keyboard()
-    )
-dispatcher.add_handler(CommandHandler("start", start))
+# Environment variables (set these on Render)
+TOKEN               = os.environ["8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo "]
+ADMIN_ID            = int(os.environ["7251748706"])
+PIXABAY_API_KEY     = os.environ["51444506-bffefcaf12816bd85a20222d1"]
+REQUIRED_CHANNELS   = os.environ.get("REQUIRED_CHANNELS", "@crazys7,@AWU87").split(",")
+WEBHOOK_URL         = os.environ.get("WEBHOOK_URL")  # e.g. https://<your-render-app>.onrender.com
+PORT                = int(os.environ.get("PORT", "8443"))
 
 
-# 5. التحقق من اشتراك المستخدم
-def check_subscription(user_id):
-    for ch in CHANNELS:
+async def check_subscription(user_id: int, bot) -> bool:
+    """
+    تأكد أن المستخدم مشترك في جميع القنوات المطلوبة
+    """
+    for channel in REQUIRED_CHANNELS:
         try:
-            member = updater.bot.get_chat_member(chat_id=ch, user_id=user_id)
-            if member.status not in ("member", "creator", "administrator"):
+            member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
+            if member.status not in ("member", "administrator", "creator"):
                 return False
         except:
             return False
     return True
 
-def check_sub_callback(update: Update, context):
-    query = update.callback_query
-    user  = query.from_user
-    if check_subscription(user.id):
-        context.user_data["verified"]    = True
-        context.user_data["search_type"] = "photos"
-        query.answer("تم التحقق ✅")
-        query.edit_message_text(
-            text="تم التحقق! يمكنك الآن البدء بالبحث أو اختيار النوع:",
-            reply_markup=build_main_keyboard("photos")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /start handler: 
+    - يمسح بيانات الجلسة السابقة
+    - يتحقق من الاشتراك ويدعو للتحقق إذا لزم الأمر
+    """
+    context.user_data.clear()
+    user_id = update.effective_user.id
+
+    if not await check_subscription(user_id, context.bot):
+        text = "للوصول للبوت يجب الاشتراك في القنوات التالية:\n" + "\n".join(
+            f"- {ch}" for ch in REQUIRED_CHANNELS
+        )
+        keyboard = []
+        for ch in REQUIRED_CHANNELS:
+            keyboard.append(
+                [InlineKeyboardButton(ch, url=f"https://t.me/{ch.lstrip('@')}")]
+            )
+        keyboard.append([InlineKeyboardButton("تحقق | Check", callback_data="verify")])
+
+        await update.message.reply_text(
+            text, reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
-        query.answer("يرجى الاشتراك في جميع القنوات أولاً 🔔", show_alert=True)
-dispatcher.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
+        # مشترك فعلاً → أظهر القائمة الرئيسية
+        await show_main_menu(update.effective_chat.id, context.bot)
 
 
-# 6. اختيار نوع البحث
-def choose_type_callback(update: Update, context):
+async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    callback_data="verify": إعادة التحقق من الاشتراك
+    """
     query = update.callback_query
-    query.answer()
-    query.edit_message_reply_markup(reply_markup=build_type_keyboard())
-dispatcher.add_handler(CallbackQueryHandler(choose_type_callback, pattern="^choose_type$"))
+    await query.answer()
 
-def set_type_callback(update: Update, context):
-    query = update.callback_query
-    _, t = query.data.split(":")
-    context.user_data["search_type"] = t
-    query.answer(f"تم اختيار النوع: {t}")
-    query.edit_message_text(
-        text=f"نوع البحث الحالي: {t}\nيمكنك البدء بالبحث أو تغيير النوع:",
-        reply_markup=build_main_keyboard(t)
+    user_id = query.from_user.id
+    if await check_subscription(user_id, context.bot):
+        # تحويل الرسالة الحالية ثم إظهار القائمة الرئيسية
+        await query.edit_message_text("تم التحقق! اختر خياراً:")
+        await show_main_menu(query.message.chat.id, context.bot)
+    else:
+        await query.answer("لا زلت غير مشترك في جميع القنوات.", show_alert=True)
+
+
+async def show_main_menu(chat_id: int, bot):
+    """
+    يعرض زري 'بدء البحث' و 'انواع البحث'
+    """
+    keyboard = [
+        [InlineKeyboardButton("بدء البحث 👁", callback_data="start_search")],
+        [InlineKeyboardButton("انواع البحث🧸", callback_data="choose_type")],
+    ]
+    await bot.send_message(
+        chat_id=chat_id,
+        text="اختر خياراً:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
-dispatcher.add_handler(CallbackQueryHandler(set_type_callback, pattern="^type:"))
 
 
-# 7. بدء استقبال كلمة البحث
-def start_search_callback(update: Update, context):
+async def choose_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    callback_data="choose_type": عرض أنواع البحث وتظليل المحدد حالياً
+    """
     query = update.callback_query
-    if not context.user_data.get("verified"):
-        return query.answer("يرجى التحقق أولاً", show_alert=True)
-    context.user_data["awaiting_query"] = True
-    query.answer()
-    query.edit_message_text(text="أرسل كلمة البحث الآن:")
-dispatcher.add_handler(CallbackQueryHandler(start_search_callback, pattern="^start_search$"))
+    await query.answer()
 
-
-# 8. التعامل مع كلمة البحث وإرسال النتائج
-def search_pixabay(q, search_type):
-    url = "https://pixabay.com/api/"
-    params = {
-        "key": PIXABAY_API_KEY,
-        "q": q,
-        "image_type": "all" if search_type == "photos" else search_type,
-        "per_page": 10,
+    current = context.user_data.get("search_type")
+    types = {
+        "illustration": "Illustration",
+        "photo": "photos",
+        "vector": "vector",
+        "video": "video",
     }
-    data = requests.get(url, params=params).json()
-    return data.get("hits", [])
 
-def handle_message(update: Update, context):
+    keyboard = []
+    for key, name in types.items():
+        label = f"{name} {'🧸' if current == key else ''}"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"set_type_{key}")])
+
+    await query.edit_message_text(
+        "اختر نوع البحث:", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def set_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    callback_data="set_type_{type}": حفظ نوع البحث وإرجاع القائمة الرئيسية
+    """
+    query = update.callback_query
+    await query.answer()
+
+    chosen = query.data.split("_")[-1]
+    context.user_data["search_type"] = chosen
+
+    await query.edit_message_text(f"تم اختيار نوع البحث: {chosen}")
+    await show_main_menu(query.message.chat.id, context.bot)
+
+
+async def start_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    callback_data="start_search": بدء جلسة البحث (يطلب كلمة البحث)
+    """
+    query = update.callback_query
+    await query.answer()
+
+    if "search_type" not in context.user_data:
+        context.user_data["search_type"] = "photo"  # افتراضي
+
+    context.user_data["awaiting_query"] = True
+    await query.edit_message_text("أرسل كلمة البحث:")
+
+
+async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    بعد إرسال كلمة البحث: استدعاء Pixabay API وعرض أول نتيجة مع أزرار التنقل
+    """
     if not context.user_data.get("awaiting_query"):
         return
-    query_text = update.message.text
-    hits = search_pixabay(query_text, context.user_data["search_type"])
-    if not hits:
-        return update.message.reply_text("لا توجد نتائج، حاول كلمة أخرى.")
-    context.user_data["results"] = hits
-    context.user_data["index"]   = 0
+
+    query_text = update.message.text.strip()
     context.user_data["awaiting_query"] = False
-    send_result(update, context, edit=False)
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
-
-# 9. عرض نتيجة واحدة مع أزرار التنقل والاختيار
-def send_result(update_or_query, context, edit=False):
-    idx     = context.user_data["index"]
-    item    = context.user_data["results"][idx]
-    chat_id = update_or_query.effective_chat.id
-    kb      = build_nav_keyboard()
-
-    if context.user_data["search_type"] == "video":
-        media_url = item["videos"]["medium"]["url"]
-        if edit:
-            context.bot.edit_message_media(
-                media=InputMediaVideo(media_url),
-                chat_id=chat_id,
-                message_id=update_or_query.callback_query.message.message_id,
-                reply_markup=kb,
-            )
-        else:
-            context.bot.send_video(chat_id=chat_id, video=media_url, reply_markup=kb)
-
+    stype = context.user_data.get("search_type", "photo")
+    if stype == "video":
+        url = (
+            f"https://pixabay.com/api/videos/?key={PIXABAY_API_KEY}"
+            f"&q={query_text}"
+        )
     else:
-        media_url = item.get("webformatURL") or item.get("previewURL")
-        if edit:
-            context.bot.edit_message_media(
-                media=InputMediaPhoto(media_url),
-                chat_id=chat_id,
-                message_id=update_or_query.callback_query.message.message_id,
-                reply_markup=kb,
-            )
-        else:
-            context.bot.send_photo(chat_id=chat_id, photo=media_url, reply_markup=kb)
+        url = (
+            f"https://pixabay.com/api/?key={PIXABAY_API_KEY}"
+            f"&q={query_text}&image_type={stype}"
+        )
+
+    resp = requests.get(url)
+    data = resp.json()
+    hits = data.get("hits", [])
+
+    if not hits:
+        await update.message.reply_text("لم يتم العثور على نتائج.")
+        return
+
+    context.user_data["results"] = hits
+    context.user_data["index"] = 0
+
+    await send_result(update.message.chat.id, context)
 
 
-# 10. التنقل بين النتائج
-def nav_callback(update: Update, context):
-    query     = update.callback_query
-    _, action = query.data.split(":")
-    idx       = context.user_data["index"]
-    max_idx   = len(context.user_data["results"]) - 1
+async def send_result(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """
+    يعرض النتيجة الحالية (صورة أو رابط فيديو) مع أزرار Prev/Next و Choose
+    """
+    ud = context.user_data
+    idx = ud["index"]
+    hits = ud["results"]
+    result = hits[idx]
 
-    if action == "next":
-        idx = min(idx + 1, max_idx)
+    # حذف الرسائل القديمة إن وجدت
+    for key in ("result_message_id", "nav_message_id"):
+        if key in ud:
+            try:
+                await context.bot.delete_message(chat_id, ud[key])
+            except:
+                pass
+
+    # عرض الوسيط
+    if ud["search_type"] == "video":
+        video_url = result["videos"]["medium"]["url"]
+        msg = await context.bot.send_message(chat_id, text=video_url)
     else:
-        idx = max(idx - 1, 0)
+        img_url = result.get("largeImageURL")
+        msg = await context.bot.send_photo(chat_id, photo=img_url)
 
-    context.user_data["index"] = idx
-    query.answer()
-    send_result(query, context, edit=True)
-dispatcher.add_handler(CallbackQueryHandler(nav_callback, pattern="^nav:"))
+    ud["result_message_id"] = msg.message_id
+
+    # أزرار التنقل والاختيار
+    kb_nav = []
+    if idx > 0:
+        kb_nav.append(InlineKeyboardButton("⬅️", callback_data="nav_prev"))
+    if idx < len(hits) - 1:
+        kb_nav.append(InlineKeyboardButton("➡️", callback_data="nav_next"))
+
+    keyboard = [
+        kb_nav,
+        [InlineKeyboardButton("اختيار🔒", callback_data="choose")],
+    ]
+
+    nav_msg = await context.bot.send_message(
+        chat_id,
+        text=f"نتيجة {idx + 1} من {len(hits)}",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    ud["nav_message_id"] = nav_msg.message_id
 
 
-# 11. اختيار النتيجة والإغلاق
-def select_callback(update: Update, context):
+async def nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    callback_data in [nav_prev, nav_next]: تحديث الفهرس وإعادة العرض
+    """
     query = update.callback_query
-    query.answer("تم الإختيار 🔒")
-    query.edit_message_reply_markup(reply_markup=None)
-    context.user_data.clear()
-dispatcher.add_handler(CallbackQueryHandler(select_callback, pattern="^select$"))
+    await query.answer()
+
+    if "index" not in context.user_data:
+        return
+
+    if query.data == "nav_prev":
+        context.user_data["index"] = max(0, context.user_data["index"] - 1)
+    else:
+        context.user_data["index"] = min(
+            len(context.user_data["results"]) - 1, context.user_data["index"] + 1
+        )
+
+    await send_result(query.message.chat.id, context)
 
 
-# 12. تشغيل البوت
+async def choose_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    callback_data="choose": المستخدم يختار النتيجة الحالية نهائياً
+    """
+    query = update.callback_query
+    await query.answer()
+
+    ud = context.user_data
+    idx = ud["index"]
+    result = ud["results"][idx]
+
+    # حذف الرسائل المؤقتة
+    for key in ("result_message_id", "nav_message_id"):
+        if key in ud:
+            try:
+                await context.bot.delete_message(query.message.chat.id, ud[key])
+            except:
+                pass
+
+    # إرسال النتيجة النهائية
+    if ud["search_type"] == "video":
+        url = result["videos"]["medium"]["url"]
+        await context.bot.send_message(query.message.chat.id, text=f"تم اختيار الفيديو:\n{url}")
+    else:
+        img_url = result.get("largeImageURL")
+        await context.bot.send_photo(
+            query.message.chat.id, photo=img_url, caption="تم اختيار الصورة"
+        )
+
+    # مسح حالة البحث للسماح ببدء جديد عبر /start
+    for key in ("results", "index", "result_message_id", "nav_message_id", "awaiting_query"):
+        ud.pop(key, None)
+
+
+def main():
+    # بناء التطبيق
+    app = Application.builder().token(TOKEN).build()
+
+    # تسجيل ال handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify$"))
+    app.add_handler(CallbackQueryHandler(choose_type_callback, pattern="^choose_type$"))
+    app.add_handler(CallbackQueryHandler(set_type_callback, pattern="^set_type_"))
+    app.add_handler(CallbackQueryHandler(start_search_callback, pattern="^start_search$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search_query))
+    app.add_handler(CallbackQueryHandler(nav_callback, pattern="^nav_"))
+    app.add_handler(CallbackQueryHandler(choose_callback, pattern="^choose$"))
+
+    # إعداد Webhook أو Polling بناءً على وجود WEBHOOK_URL
+    if WEBHOOK_URL:
+        # يضبط Webhook تلقائياً عند الانطلاق
+        app.bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
+        app.run_webhook(
+            listen="0.0.0.0", port=PORT, webhook_path=TOKEN
+        )
+    else:
+        app.run_polling()
+
+
 if __name__ == "__main__":
-    updater.start_polling()
-    updater.idle()
+    main()
