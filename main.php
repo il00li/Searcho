@@ -1,126 +1,100 @@
 <?php
+declare(strict_types=1);
 date_default_timezone_set('Asia/Riyadh');
 
-##########################
-##  إعدادات البوت
-##########################
-
-$BOT_TOKEN   = '8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo';  // استبدل بالتوكن الجديد لو جددته
-$ADMIN_ID    = 7251748706;
-$API_KEY     = '51444506-bffefcaf12816bd85a20222d1';
+// جلب المتغيرات من البيئة (أو ضع القيم الصريحة إذا لزم)
+$BOT_TOKEN   = getenv('BOT_TOKEN') ?: '8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo';
+$API_KEY     = getenv('API_KEY')   ?: '51444506-bffefcaf12816bd85a20222d1';
+$ADMIN_ID    = (int)(getenv('ADMIN_ID') ?: 7251748706);
 $CHANNELS    = ['@crazys7', '@AWU87'];
 
-##########################
-##  حالات المستخدمين
-##########################
+// حالات المستخدمين
+$userStates     = []; // [userId => ['waiting_query'=>bool, 'current_index'=>int]]
+$userSearchType = []; // [userId => 'illustration'|'photo'|'video'|'vector']
+$userResults    = []; // [userId => hits array]
 
-$userSearchType   = [];  // نوع البحث لكل مستخدم
-$userResults      = [];  // نتائج Pixabay لكل مستخدم
-$userStates       = [];  // flags: waiting_for_query, current_index
-
-##########################
-##  حلقة الاستماع للتحديثات
-##########################
-
+// بدء long polling
 $offset = 0;
 while (true) {
     $updates = getUpdates($offset);
     foreach ($updates as $upd) {
-        $offset = $upd['update_id'] + 1;
+        $offset = (int)$upd['update_id'] + 1;
         handleUpdate($upd);
     }
     sleep(1);
 }
 
-##########################
-##  جلب التحديثات (long polling)
-##########################
-
-function getUpdates($offset)
+// جلب التحديثات
+function getUpdates(int $offset): array
 {
     global $BOT_TOKEN;
-    $url = "https://api.telegram.org/bot{$BOT_TOKEN}/getUpdates?timeout=30&offset={$offset}";
-    $res = file_get_contents($url);
-    $data = json_decode($res, true);
-    return $data['ok'] ? $data['result'] : [];
+    $resp = @file_get_contents(
+        "https://api.telegram.org/bot{$BOT_TOKEN}/getUpdates?offset={$offset}&timeout=30"
+    );
+    $data = json_decode($resp ?: '', true);
+    return $data['result'] ?? [];
 }
 
-##########################
-##  التعامل مع كل تحديث
-##########################
-
-function handleUpdate($upd)
+// التعامل مع تحديث وحيد
+function handleUpdate(array $upd): void
 {
-    global $userStates;
-
-    if (isset($upd['message']) && isset($upd['message']['text'])) {
-        $msg    = $upd['message'];
-        $chatId = $msg['chat']['id'];
-        $userId = $msg['from']['id'];
-        $text   = $msg['text'];
-
-        // /start
-        if ($text === '/start') {
-            handleStart($chatId, $userId, $upd['message']['message_id']);
-            return;
-        }
-
-        // استقبال كلمة البحث
-        if (!empty($userStates[$userId]['waiting_for_query'])) {
-            handleQuery($chatId, $userId, $text);
-            return;
-        }
+    if (isset($upd['message'])) {
+        handleMessage($upd['message']);
     }
-
     if (isset($upd['callback_query'])) {
         handleCallback($upd['callback_query']);
     }
 }
 
-##########################
-##  أمر /start
-##########################
-
-function handleStart($chatId, $userId, $messageId)
+// التعامل مع الرسائل
+function handleMessage(array $msg): void
 {
-    global $CHANNELS;
+    global $userStates;
+    $chatId = $msg['chat']['id'];
+    $userId = $msg['from']['id'];
+    $text   = $msg['text'] ?? '';
 
-    if (!isUserSubscribed($userId)) {
-        $txt = "⚠️ اشترك أولاً في القنوات التالية:";
-        foreach ($CHANNELS as $ch) {
-            $txt .= "\n• {$ch}";
-        }
-        sendMessage($chatId, $txt, [
-            'inline_keyboard' => [[
-                ['text' => "تحقق | Check", 'callback_data' => 'verify']
-            ]]
-        ]);
-    } else {
-        sendMessage($chatId, "مرحبا بك 👋 اختر أحد الخيارات:", [
-            'inline_keyboard' => [
-                [['text' => "👁 بدء البحث",   'callback_data' => 'start_search']],
-                [['text' => "🧸 انواع البحث", 'callback_data' => 'select_type']],
-            ]
-        ]);
+    if ($text === '/start') {
+        cmdStart($chatId, $userId);
+        return;
+    }
+
+    if (!empty($userStates[$userId]['waiting_query'])) {
+        processQuery($chatId, $userId, trim($text));
     }
 }
 
-##########################
-##  التحقق من الاشتراك
-##########################
+// أمر /start
+function cmdStart(int $chatId, int $userId): void
+{
+    global $CHANNELS, $userStates;
+    $userStates[$userId]['waiting_query'] = false;
 
-function isUserSubscribed($userId)
+    if (!isUserSubscribed($userId)) {
+        $keyboard = [[['text'=>'تحقق | Check','callback_data'=>'verify']]];
+        $text = "⚠️ اشترك أولاً في هذه القنوات:\n" . implode("\n", array_map(fn($c)=>"• $c", $CHANNELS));
+        sendMessage($chatId, $text, $keyboard);
+    } else {
+        $keyboard = [
+            [['text'=>'👁 بدء البحث','callback_data'=>'start_search']],
+            [['text'=>'🧸 أنواع البحث','callback_data'=>'select_type']],
+        ];
+        sendMessage($chatId, 'أهلاً بك 👋 اختر:', $keyboard);
+    }
+}
+
+// فحص الاشتراك في القنوات
+function isUserSubscribed(int $userId): bool
 {
     global $BOT_TOKEN, $CHANNELS;
-
-    foreach ($CHANNELS as $ch) {
-        $resp = file_get_contents(
+    foreach ($CHANNELS as $channel) {
+        $resp = @file_get_contents(
             "https://api.telegram.org/bot{$BOT_TOKEN}/getChatMember"
-            . "?chat_id={$ch}&user_id={$userId}"
+            . "?chat_id={$channel}&user_id={$userId}"
         );
-        $j = json_decode($resp, true);
-        if (!$j['ok'] ||
-            !in_array($j['result']['status'], ['member','administrator','creator'])
+        $data = json_decode($resp ?: '', true);
+        if (empty($data['ok']) ||
+            !in_array($data['result']['status'], ['member','creator','administrator'])
         ) {
             return false;
         }
@@ -128,226 +102,194 @@ function isUserSubscribed($userId)
     return true;
 }
 
-##########################
-##  التعامل مع callback_query
-##########################
-
-function handleCallback($cq)
+// التعامل مع الأزرار (CallbackQuery)
+function handleCallback(array $cq): void
 {
-    global $userSearchType, $userStates;
-
-    $data   = $cq['data'];
-    $chatId = $cq['message']['chat']['id'];
-    $msgId  = $cq['message']['message_id'];
-    $userId = $cq['from']['id'];
+    global $userStates, $userSearchType;
+    $data      = $cq['data'];
+    $chatId    = $cq['message']['chat']['id'];
+    $msgId     = $cq['message']['message_id'];
+    $userId    = $cq['from']['id'];
 
     answerCallback($cq['id']);
 
-    if ($data === 'verify') {
-        handleStart($chatId, $userId, $msgId);
-        return;
-    }
-
-    if ($data === 'select_type') {
-        $keys = [];
-        foreach (['illustration','photo','video','vector'] as $t) {
-            $keys[] = [['text' => "🧸 {$t}", 'callback_data' => "type_{$t}"]];
-        }
-        sendMessage($chatId, "اختر نوع البحث:", [
-            'inline_keyboard' => $keys
-        ]);
-        return;
-    }
-
-    if (strpos($data, 'type_') === 0) {
-        $type = substr($data, 5);
-        $userSearchType[$userId] = $type;
-        editMessageText(
-            $chatId, $msgId,
-            "✅ تم اختيار نوع البحث: {$type}"
-        );
-        return;
-    }
-
-    if ($data === 'start_search') {
-        $userStates[$userId]['waiting_for_query'] = true;
-        sendMessage($chatId, "📥 أرسل كلمة البحث الآن:");
-        return;
-    }
-
-    // تنقل النتائج
-    if (in_array($data, ['next','prev'])) {
-        $dir = $data === 'next' ? +1 : -1;
-        $userStates[$userId]['current_index'] =
-            ($userStates[$userId]['current_index'] + $dir + count($GLOBALS['userResults'][$userId]))
-            % count($GLOBALS['userResults'][$userId]);
-        showResult($chatId, $msgId, $userId);
-        return;
-    }
-
-    if ($data === 'lock') {
-        // إزالة الأزرار
-        editMessageReplyMarkup($chatId, $msgId);
-        sendMessage($chatId, "✅ تم اختيار هذه النتيجة.\n🔄 لإعادة البحث: /start");
-        return;
-    }
+    return match (true) {
+        $data === 'verify'      => cmdStart($chatId, $userId),
+        $data === 'select_type' => showTypeOptions($chatId),
+        str_starts_with($data, 'type_')     => setSearchType($chatId, $msgId, $userId, $data),
+        $data === 'start_search'            => startSearch($chatId, $userId),
+        in_array($data,['next','prev'])     => navResults($cq, $data),
+        $data === 'lock'                    => lockResult($chatId, $msgId),
+        default                            => null,
+    };
 }
 
-##########################
-##  استقبال كلمة البحث
-##########################
+// عرض أنواع البحث
+function showTypeOptions(int $chatId): void
+{
+    $types = ['illustration','photo','video','vector'];
+    $keyboard = array_map(fn($t)=>[['text'=>"🧸 $t",'callback_data'=>"type_$t"]], $types);
+    sendMessage($chatId, 'اختر نوع البحث:', $keyboard);
+}
 
-function handleQuery($chatId, $userId, $query)
+// تعيين نوع البحث
+function setSearchType(int $chatId, int $msgId, int $userId, string $data): void
+{
+    global $userSearchType;
+    $type = substr($data, 5);
+    $userSearchType[$userId] = $type;
+    editMessageText($chatId, $msgId, "✅ تم اختيار: $type");
+}
+
+// بدء البحث
+function startSearch(int $chatId, int $userId): void
+{
+    global $userStates;
+    $userStates[$userId]['waiting_query'] = true;
+    sendMessage($chatId, '📥 أرسل كلمة البحث:');
+}
+
+// معالجة كلمة البحث
+function processQuery(int $chatId, int $userId, string $query): void
 {
     global $API_KEY, $userSearchType, $userResults, $userStates;
-
     $type = $userSearchType[$userId] ?? 'illustration';
-    $url  = "https://pixabay.com/api/?key={$API_KEY}"
-          . "&q=" . urlencode($query)
-          . "&image_type={$type}";
+    $url  = "https://pixabay.com/api/?key={$API_KEY}&q=" . urlencode($query) . "&image_type={$type}";
 
-    $resp = file_get_contents($url);
-    $j    = json_decode($resp, true);
-    $hits = $j['hits'] ?? [];
+    $resp = @file_get_contents($url);
+    $data = json_decode($resp ?: '', true);
+    $hits = $data['hits'] ?? [];
 
     if (empty($hits)) {
-        sendMessage($chatId, "❌ لم يتم العثور على نتائج ل\"{$query}\"");
-        $userStates[$userId]['waiting_for_query'] = false;
+        sendMessage($chatId, "❌ لا توجد نتائج لكلمة: «{$query}» [$type]");
+        $userStates[$userId]['waiting_query'] = false;
         return;
     }
 
-    $userResults[$userId]      = $hits;
-    $userStates[$userId]       = [
-        'waiting_for_query' => false,
-        'current_index'     => 0
-    ];
-
+    $userResults[$userId] = $hits;
+    $userStates[$userId]  = ['waiting_query'=>false,'current_index'=>0];
     showResult($chatId, null, $userId);
 }
 
-##########################
-##  عرض النتيجة الحالية
-##########################
-
-function showResult($chatId, $msgId, $userId)
+// عرض نتيجة واحدة
+function showResult(int $chatId, ?int $msgId, int $userId): void
 {
     global $userResults, $userStates;
-
-    $idx    = $userStates[$userId]['current_index'];
-    $item   = $userResults[$userId][$idx];
-    $url    = $item['webformatURL'] ?? null;
+    $idx   = $userStates[$userId]['current_index'];
+    $item  = $userResults[$userId][$idx];
+    $photo = $item['webformatURL'] ?? '';
     $caption = $item['tags'] ?? '';
 
     $keyboard = [
         [
-            ['text' => '⬅️', 'callback_data' => 'prev'],
-            ['text' => '➡️', 'callback_data' => 'next']
+            ['text'=>'⬅️','callback_data'=>'prev'],
+            ['text'=>'➡️','callback_data'=>'next'],
         ],
         [
-            ['text' => 'اختيار 🔒', 'callback_data' => 'lock']
+            ['text'=>'اختيار 🔒','callback_data'=>'lock']
         ]
     ];
 
-    // إذا اتينا من callback نعدل الرسالة، وإلا نرسل جديدة
-    if ($msgId) {
-        editMessageMedia($chatId, $msgId, $url, $caption, $keyboard);
+    if ($msgId !== null) {
+        editMessageMedia($chatId, $msgId, $photo, $caption, $keyboard);
     } else {
-        sendPhoto($chatId, $url, $caption, $keyboard);
+        sendPhoto($chatId, $photo, $caption, $keyboard);
     }
 }
 
-##########################
-##  دوال مساعدة للتواصل مع Telegram API
-##########################
-
-function sendMessage($chatId, $text, $replyMarkup = null)
+// التنقل بين النتائج
+function navResults(array $cq, string $dir): void
 {
-    global $BOT_TOKEN;
-    $payload = [
-        'chat_id' => $chatId,
-        'text'    => $text,
-        'parse_mode' => 'HTML'
-    ];
-    if ($replyMarkup) {
-        $payload['reply_markup'] = json_encode($replyMarkup);
+    global $userResults, $userStates;
+    $chatId = $cq['message']['chat']['id'];
+    $msgId  = $cq['message']['message_id'];
+    $userId = $cq['from']['id'];
+
+    $total = count($userResults[$userId] ?? []);
+    if ($total === 0) {
+        sendMessage($chatId, 'لا توجد نتائج حالياً.');
+        return;
     }
-    file_get_contents(
-        "https://api.telegram.org/bot{$BOT_TOKEN}/sendMessage?" .
-        http_build_query($payload)
-    );
+
+    $step = $dir === 'next' ? 1 : -1;
+    $idx = ($userStates[$userId]['current_index'] + $step + $total) % $total;
+    $userStates[$userId]['current_index'] = $idx;
+
+    showResult($chatId, $msgId, $userId);
 }
 
-function sendPhoto($chatId, $photoUrl, $caption = '', $replyMarkup = null)
+// قفل النتيجة وإزالة الأزرار
+function lockResult(int $chatId, int $msgId): void
+{
+    editMessageReplyMarkup($chatId, $msgId);
+    sendMessage($chatId, "✅ تم اختيار هذه النتيجة.\n🔄 لإعادة البحث: /start");
+}
+
+// دوال مساعدة للتواصل مع Telegram API
+
+function sendMessage(int $chatId, string $text, array $keyboard = null): void
 {
     global $BOT_TOKEN;
-    $payload = [
-        'chat_id' => $chatId,
-        'photo'   => $photoUrl,
-        'caption' => $caption,
-        'parse_mode' => 'HTML'
-    ];
-    if ($replyMarkup) {
-        $payload['reply_markup'] = json_encode($replyMarkup);
+    $payload = ['chat_id'=>$chatId,'text'=>$text,'parse_mode'=>'HTML'];
+    if ($keyboard) {
+        $payload['reply_markup'] = json_encode(['inline_keyboard'=>$keyboard]);
     }
-    file_get_contents(
-        "https://api.telegram.org/bot{$BOT_TOKEN}/sendPhoto?" .
-        http_build_query($payload)
+    @file_get_contents("https://api.telegram.org/bot{$BOT_TOKEN}/sendMessage?" . http_build_query($payload));
+}
+
+function sendPhoto(int $chatId, string $photo, string $caption, array $keyboard = null): void
+{
+    global $BOT_TOKEN;
+    $payload = ['chat_id'=>$chatId,'photo'=>$photo,'caption'=>$caption,'parse_mode'=>'HTML'];
+    if ($keyboard) {
+        $payload['reply_markup'] = json_encode(['inline_keyboard'=>$keyboard]);
+    }
+    @file_get_contents("https://api.telegram.org/bot{$BOT_TOKEN}/sendPhoto?" . http_build_query($payload));
+}
+
+function answerCallback(string $callbackId): void
+{
+    global $BOT_TOKEN;
+    @file_get_contents(
+        "https://api.telegram.org/bot{$BOT_TOKEN}/answerCallbackQuery?"
+      . http_build_query(['callback_query_id'=>$callbackId])
     );
 }
 
-function answerCallback($callbackId)
+function editMessageText(int $chatId, int $msgId, string $text): void
 {
     global $BOT_TOKEN;
-    file_get_contents(
-        "https://api.telegram.org/bot{$BOT_TOKEN}/answerCallbackQuery?" .
-        http_build_query(['callback_query_id' => $callbackId])
-    );
-}
-
-function editMessageText($chatId, $messageId, $text)
-{
-    global $BOT_TOKEN;
-    $params = [
-        'chat_id'    => $chatId,
-        'message_id' => $messageId,
-        'text'       => $text,
-        'parse_mode' => 'HTML'
-    ];
-    file_get_contents(
-        "https://api.telegram.org/bot{$BOT_TOKEN}/editMessageText?" .
-        http_build_query($params)
-    );
-}
-
-function editMessageMedia($chatId, $messageId, $mediaUrl, $caption, $keyboard)
-{
-    global $BOT_TOKEN;
-    $media = [
-        'type'    => 'photo',
-        'media'   => $mediaUrl,
-        'caption' => $caption,
-        'parse_mode' => 'HTML'
-    ];
-    $payload = [
-        'chat_id'    => $chatId,
-        'message_id' => $messageId,
-        'media'      => json_encode($media),
-        'reply_markup' => json_encode($keyboard)
-    ];
-    file_get_contents(
-        "https://api.telegram.org/bot{$BOT_TOKEN}/editMessageMedia?" .
-        http_build_query($payload)
-    );
-}
-
-function editMessageReplyMarkup($chatId, $messageId)
-{
-    global $BOT_TOKEN;
-    file_get_contents(
-        "https://api.telegram.org/bot{$BOT_TOKEN}/editMessageReplyMarkup?" .
-        http_build_query([
-            'chat_id'    => $chatId,
-            'message_id' => $messageId
+    @file_get_contents(
+        "https://api.telegram.org/bot{$BOT_TOKEN}/editMessageText?"
+      . http_build_query([
+            'chat_id'=>$chatId,
+            'message_id'=>$msgId,
+            'text'=>$text,
+            'parse_mode'=>'HTML'
         ])
+    );
+}
+
+function editMessageMedia(int $chatId, int $msgId, string $media, string $caption, array $keyboard): void
+{
+    global $BOT_TOKEN;
+    $mediaArr = ['type'=>'photo','media'=>$media,'caption'=>$caption,'parse_mode'=>'HTML'];
+    $payload = [
+        'chat_id'=>$chatId,
+        'message_id'=>$msgId,
+        'media'=>json_encode($mediaArr),
+        'reply_markup'=>json_encode(['inline_keyboard'=>$keyboard])
+    ];
+    @file_get_contents(
+        "https://api.telegram.org/bot{$BOT_TOKEN}/editMessageMedia?" . http_build_query($payload)
+    );
+}
+
+function editMessageReplyMarkup(int $chatId, int $msgId): void
+{
+    global $BOT_TOKEN;
+    @file_get_contents(
+        "https://api.telegram.org/bot{$BOT_TOKEN}/editMessageReplyMarkup?"
+      . http_build_query(['chat_id'=>$chatId,'message_id'=>$msgId])
     );
 }
