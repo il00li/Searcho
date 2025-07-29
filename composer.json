@@ -1,7 +1,13 @@
 {
+  "name": "yourname/telegram-pixabay-bot",
+  "description": "Telegram bot for graphic designers using Pixabay API",
   "require": {
     "php": ">=7.4",
-    "ext-curl": "*",
-    "ext-json": "*"
+    "ext-curl": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "Bot\\": "src/"
+    }
   }
 }
