@@ -2,15 +2,14 @@ FROM php:8.2-cli
 
 WORKDIR /app
 
-# تنصيب curl
+# تثبيت curl
 RUN apt-get update && apt-get install -y curl
 
-# نسخ الملفات
+# نسخ ملفات البوت كاملة
 COPY . /app
 
-# تثبيت Composer (اختياري لو تحتاج تحديثات)
-# RUN php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" \
-#     && php composer-setup.php --install-dir=/usr/local/bin --filename=composer \
-#     && rm composer-setup.php
+# إخطار Render بالمنفذ
+EXPOSE 10000
 
-CMD ["php", "bot.php"]
+# تشغيل PHP Built-in Web Server باستخدام متغير PORT
+CMD ["sh", "-c", "php -S 0.0.0.0:${PORT:-10000} index.php"] 
