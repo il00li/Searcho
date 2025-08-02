@@ -1,0 +1,5 @@
+services:
+  - type: static
+    name: deaso-ui
+    env: static
+    staticPublishPath: public
