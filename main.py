@@ -1,319 +1,264 @@
-import os
-import logging
-import requests
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+"""
+Searo Telegram Bot
+==================
+بوت بحث/موارد مخصَّص للمصممين، يعتمد على Pixabay API ويشترط الاشتراك
+في قناتي @crazys7 و @AWU87 قبل الاستخدام.
+
+آخر تعديل: 2025-08-02
+"""
+
+import asyncio
+import logging
+import os
+from functools import wraps
+
+import aiohttp
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
+from telegram.constants import ChatMemberStatus, ParseMode
 from telegram.ext import (
-    Application,
-    CommandHandler,
+    ApplicationBuilder,
     CallbackQueryHandler,
-    MessageHandler,
+    CommandHandler,
     ContextTypes,
+    MessageHandler,
     filters,
 )
 
-# Enable logging
+# ────────────────────────────────
+# 🎛️ الضبط
+# ────────────────────────────────
+TOKEN: str = os.getenv("BOT_TOKEN", "8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo")
+PIXABAY_KEY: str = os.getenv("PIXABAY_KEY", "51444506-bffefcaf12816bd85a20222d1")
+SUB_CHANNELS: list[str] = ["@crazys7", "@AWU87"]
+
+# (اختياري) أرقام معرفات المشرفين لإتاحة أوامر خاصة
+ADMINS: set[int] = {123456789}
+
+# ────────────────────────────────
+# 📝 إعداد السجلّات
+# ────────────────────────────────
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables (set these on Render)
-TOKEN               = os.environ["8071576925:AAGgx_Jkuu-mRpjdMKiOQCDkkVQskXQYhQo "]
-ADMIN_ID            = int(os.environ["7251748706"])
-PIXABAY_API_KEY     = os.environ["51444506-bffefcaf12816bd85a20222d1"]
-REQUIRED_CHANNELS   = os.environ.get("REQUIRED_CHANNELS", "@crazys7,@AWU87").split(",")
-WEBHOOK_URL         = os.environ.get("https://searcho-1.onrender.com")  # e.g. https://<your-render-app>.onrender.com
-PORT                = int(os.environ.get("PORT", "8443"))
 
+# ────────────────────────────────
+# 🔒 أدوات الحماية والمساعدات
+# ────────────────────────────────
+async def is_user_subscribed(bot, user_id: int, channels: list[str]) -> bool:
+    """
+    يتحقق من أن المستخدم مشترك في جميع القنوات المطلوبة.
 
-async def check_subscription(user_id: int, bot) -> bool:
+    Returns True إذا كان مشتركًا، وإلا False.
     """
-    تأكد أن المستخدم مشترك في جميع القنوات المطلوبة
-    """
-    for channel in REQUIRED_CHANNELS:
+    for channel in channels:
         try:
             member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
-            if member.status not in ("member", "administrator", "creator"):
+            if member.status not in (
+                ChatMemberStatus.MEMBER,
+                ChatMemberStatus.ADMINISTRATOR,
+                ChatMemberStatus.OWNER,
+            ):
                 return False
-        except:
+        except Exception as e:  # القناة قد تكون خاصة، أو تمت إزالة البوت منها
+            logger.warning("تعذر التحقق من %s: %s", channel, e)
             return False
     return True
 
 
+def admin_only(func):
+    """
+    ديكوريتر لتقييد تنفيذ الدوال على المشرفين فقط.
+    """
+
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        if user_id in ADMINS:
+            return await func(update, context, *args, **kwargs)
+        await update.message.reply_text("🚫 هذا الأمر للمشرفين فقط.")
+        return
+
+    return wrapped
+
+
+def build_main_keyboard() -> InlineKeyboardMarkup:
+    """
+    لوحة التحكُّم الرئيسية.
+    يمكنك تغيير الأزرار بما يناسبك.
+    """
+    buttons = [
+        [
+            InlineKeyboardButton("🔍 بحث عن صور", switch_inline_query_current_chat=""),
+            InlineKeyboardButton("📈 إحصائياتي", callback_data="stats"),
+        ],
+        [
+            InlineKeyboardButton("ℹ️ مساعدة", callback_data="help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+# ────────────────────────────────
+# 🚀 الأوامر والمعالجات
+# ────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    subscribed = await is_user_subscribed(context.bot, user_id, SUB_CHANNELS)
+
+    if not subscribed:
+        buttons = [
+            [InlineKeyboardButton("🔗 اشترك في @crazys7", url="https://t.me/crazys7")],
+            [InlineKeyboardButton("🔗 اشترك في @AWU87", url="https://t.me/AWU87")],
+            [InlineKeyboardButton("✅ تحقّق مجددًا", callback_data="check_sub")],
+        ]
+        await update.message.reply_text(
+            "⚠️ لا يمكنك استخدام البوت قبل الاشتراك في القنوات التالية:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    await update.message.reply_text(
+        "🎉 أهلاً بك في Searo Bot!\nاختر ما تحتاجه من القائمة 👇",
+        reply_markup=build_main_keyboard(),
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 *Searo Bot – دليل الاستخدام*\n\n"
+        "1. ابحث عن صور بكتابة أي كلمة بعد الأمر /search.\n"
+        "2. البوت يستخدم Pixabay، وبالتالي الصور خاضعة لرخصتها.\n"
+        "3. للإبلاغ عن مشكلة، راسل @crazys7.\n",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /start handler: 
-    - يمسح بيانات الجلسة السابقة
-    - يتحقق من الاشتراك ويدعو للتحقق إذا لزم الأمر
+    بحث عن صور عبر Pixabay وإرجاع النتائج بصورة مصغَّرة وروابط تحميل.
     """
-    context.user_data.clear()
+    if not context.args:
+        await update.message.reply_text("❔ مثال: `/search sunset`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    query = " ".join(context.args).strip()
+    await update.message.reply_text(f"🔎 جاري البحث عن: *{query}* ...", parse_mode=ParseMode.MARKDOWN)
+
+    url = f"https://pixabay.com/api/?key={PIXABAY_KEY}&q={query}&image_type=photo&per_page=6"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                await update.message.reply_text("⚠️ حدث خطأ أثناء الاتصال بـ Pixabay.")
+                return
+            data = await resp.json()
+
+    hits = data.get("hits", [])
+    if not hits:
+        await update.message.reply_text("🙁 لم أجد نتائج. جرّب كلمة أخرى.")
+        return
+
+    for hit in hits:
+        caption = f"👤 {hit['user']} | 👍 {hit['likes']} | 📂 {hit['tags']}"
+        await update.message.reply_photo(
+            photo=hit["webformatURL"],
+            caption=caption,
+        )
+
+
+async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    await query.answer()
+
     user_id = update.effective_user.id
 
-    if not await check_subscription(user_id, context.bot):
-        text = "للوصول للبوت يجب الاشتراك في القنوات التالية:\n" + "\n".join(
-            f"- {ch}" for ch in REQUIRED_CHANNELS
-        )
-        keyboard = []
-        for ch in REQUIRED_CHANNELS:
-            keyboard.append(
-                [InlineKeyboardButton(ch, url=f"https://t.me/{ch.lstrip('@')}")]
+    if data == "check_sub":
+        subscribed = await is_user_subscribed(context.bot, user_id, SUB_CHANNELS)
+        if subscribed:
+            await query.edit_message_text("✅ تم التحقق من الاشتراك! مرحباً بك.")
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="اختر ما تبحث عنه:",
+                reply_markup=build_main_keyboard(),
             )
-        keyboard.append([InlineKeyboardButton("تحقق | Check", callback_data="verify")])
+        else:
+            await query.edit_message_text(
+                "❌ لم يتم الاشتراك بعد.\nيرجى الاشتراك ثم الضغط على ✅ تحقّق مجددًا."
+            )
 
-        await update.message.reply_text(
-            text, reply_markup=InlineKeyboardMarkup(keyboard)
+    elif data == "stats":
+        # مثال إحصائي بسيط
+        await query.edit_message_text(
+            f"📊 عدد الطلبات التي أرسلتها: *{context.user_data.get('requests', 0)}*",
+            parse_mode=ParseMode.MARKDOWN,
         )
+
+    elif data == "help":
+        await help_command(update, context)
+
     else:
-        # مشترك فعلاً → أظهر القائمة الرئيسية
-        await show_main_menu(update.effective_chat.id, context.bot)
+        await query.edit_message_text("🤔 خيار غير معروف.")
 
 
-async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ────────────────────────────────
+# 👑 أوامر المشرفين
+# ────────────────────────────────
+@admin_only
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    callback_data="verify": إعادة التحقق من الاشتراك
+    إرسال رسالة لجميع المستخدمين (يتطلب نظام قاعدة بيانات حقيقية).
+    للاختصار، سنطبع فقط في السجل.
     """
-    query = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
-    if await check_subscription(user_id, context.bot):
-        # تحويل الرسالة الحالية ثم إظهار القائمة الرئيسية
-        await query.edit_message_text("تم التحقق! اختر خياراً:")
-        await show_main_menu(query.message.chat.id, context.bot)
-    else:
-        await query.answer("لا زلت غير مشترك في جميع القنوات.", show_alert=True)
-
-
-async def show_main_menu(chat_id: int, bot):
-    """
-    يعرض زري 'بدء البحث' و 'انواع البحث'
-    """
-    keyboard = [
-        [InlineKeyboardButton("بدء البحث 👁", callback_data="start_search")],
-        [InlineKeyboardButton("انواع البحث🧸", callback_data="choose_type")],
-    ]
-    await bot.send_message(
-        chat_id=chat_id,
-        text="اختر خياراً:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-
-async def choose_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    callback_data="choose_type": عرض أنواع البحث وتظليل المحدد حالياً
-    """
-    query = update.callback_query
-    await query.answer()
-
-    current = context.user_data.get("search_type")
-    types = {
-        "illustration": "Illustration",
-        "photo": "photos",
-        "vector": "vector",
-        "video": "video",
-    }
-
-    keyboard = []
-    for key, name in types.items():
-        label = f"{name} {'🧸' if current == key else ''}"
-        keyboard.append([InlineKeyboardButton(label, callback_data=f"set_type_{key}")])
-
-    await query.edit_message_text(
-        "اختر نوع البحث:", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-async def set_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    callback_data="set_type_{type}": حفظ نوع البحث وإرجاع القائمة الرئيسية
-    """
-    query = update.callback_query
-    await query.answer()
-
-    chosen = query.data.split("_")[-1]
-    context.user_data["search_type"] = chosen
-
-    await query.edit_message_text(f"تم اختيار نوع البحث: {chosen}")
-    await show_main_menu(query.message.chat.id, context.bot)
-
-
-async def start_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    callback_data="start_search": بدء جلسة البحث (يطلب كلمة البحث)
-    """
-    query = update.callback_query
-    await query.answer()
-
-    if "search_type" not in context.user_data:
-        context.user_data["search_type"] = "photo"  # افتراضي
-
-    context.user_data["awaiting_query"] = True
-    await query.edit_message_text("أرسل كلمة البحث:")
-
-
-async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    بعد إرسال كلمة البحث: استدعاء Pixabay API وعرض أول نتيجة مع أزرار التنقل
-    """
-    if not context.user_data.get("awaiting_query"):
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("✍️ اكتب الرسالة بعد الأمر.")
         return
-
-    query_text = update.message.text.strip()
-    context.user_data["awaiting_query"] = False
-
-    stype = context.user_data.get("search_type", "photo")
-    if stype == "video":
-        url = (
-            f"https://pixabay.com/api/videos/?key={PIXABAY_API_KEY}"
-            f"&q={query_text}"
-        )
-    else:
-        url = (
-            f"https://pixabay.com/api/?key={PIXABAY_API_KEY}"
-            f"&q={query_text}&image_type={stype}"
-        )
-
-    resp = requests.get(url)
-    data = resp.json()
-    hits = data.get("hits", [])
-
-    if not hits:
-        await update.message.reply_text("لم يتم العثور على نتائج.")
-        return
-
-    context.user_data["results"] = hits
-    context.user_data["index"] = 0
-
-    await send_result(update.message.chat.id, context)
+    logger.info("Broadcast: %s", text)
+    await update.message.reply_text("✅ تم إرسال البرودكاست (وهميًا).")
 
 
-async def send_result(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """
-    يعرض النتيجة الحالية (صورة أو رابط فيديو) مع أزرار Prev/Next و Choose
-    """
-    ud = context.user_data
-    idx = ud["index"]
-    hits = ud["results"]
-    result = hits[idx]
+# ────────────────────────────────
+# 🏁 التشغيل
+# ────────────────────────────────
+async def main():
+    if TOKEN.startswith("YOUR_"):
+        raise RuntimeError("❌ ضع قيمة TOKEN في متغير BOT_TOKEN قبل التشغيل.")
 
-    # حذف الرسائل القديمة إن وجدت
-    for key in ("result_message_id", "nav_message_id"):
-        if key in ud:
-            try:
-                await context.bot.delete_message(chat_id, ud[key])
-            except:
-                pass
+    app = ApplicationBuilder().token(TOKEN).build()
 
-    # عرض الوسيط
-    if ud["search_type"] == "video":
-        video_url = result["videos"]["medium"]["url"]
-        msg = await context.bot.send_message(chat_id, text=video_url)
-    else:
-        img_url = result.get("largeImageURL")
-        msg = await context.bot.send_photo(chat_id, photo=img_url)
-
-    ud["result_message_id"] = msg.message_id
-
-    # أزرار التنقل والاختيار
-    kb_nav = []
-    if idx > 0:
-        kb_nav.append(InlineKeyboardButton("⬅️", callback_data="nav_prev"))
-    if idx < len(hits) - 1:
-        kb_nav.append(InlineKeyboardButton("➡️", callback_data="nav_next"))
-
-    keyboard = [
-        kb_nav,
-        [InlineKeyboardButton("اختيار🔒", callback_data="choose")],
-    ]
-
-    nav_msg = await context.bot.send_message(
-        chat_id,
-        text=f"نتيجة {idx + 1} من {len(hits)}",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    ud["nav_message_id"] = nav_msg.message_id
-
-
-async def nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    callback_data in [nav_prev, nav_next]: تحديث الفهرس وإعادة العرض
-    """
-    query = update.callback_query
-    await query.answer()
-
-    if "index" not in context.user_data:
-        return
-
-    if query.data == "nav_prev":
-        context.user_data["index"] = max(0, context.user_data["index"] - 1)
-    else:
-        context.user_data["index"] = min(
-            len(context.user_data["results"]) - 1, context.user_data["index"] + 1
-        )
-
-    await send_result(query.message.chat.id, context)
-
-
-async def choose_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    callback_data="choose": المستخدم يختار النتيجة الحالية نهائياً
-    """
-    query = update.callback_query
-    await query.answer()
-
-    ud = context.user_data
-    idx = ud["index"]
-    result = ud["results"][idx]
-
-    # حذف الرسائل المؤقتة
-    for key in ("result_message_id", "nav_message_id"):
-        if key in ud:
-            try:
-                await context.bot.delete_message(query.message.chat.id, ud[key])
-            except:
-                pass
-
-    # إرسال النتيجة النهائية
-    if ud["search_type"] == "video":
-        url = result["videos"]["medium"]["url"]
-        await context.bot.send_message(query.message.chat.id, text=f"تم اختيار الفيديو:\n{url}")
-    else:
-        img_url = result.get("largeImageURL")
-        await context.bot.send_photo(
-            query.message.chat.id, photo=img_url, caption="تم اختيار الصورة"
-        )
-
-    # مسح حالة البحث للسماح ببدء جديد عبر /start
-    for key in ("results", "index", "result_message_id", "nav_message_id", "awaiting_query"):
-        ud.pop(key, None)
-
-
-def main():
-    # بناء التطبيق
-    app = Application.builder().token(TOKEN).build()
-
-    # تسجيل ال handlers
+    # أوامر عامة
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify$"))
-    app.add_handler(CallbackQueryHandler(choose_type_callback, pattern="^choose_type$"))
-    app.add_handler(CallbackQueryHandler(set_type_callback, pattern="^set_type_"))
-    app.add_handler(CallbackQueryHandler(start_search_callback, pattern="^start_search$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search_query))
-    app.add_handler(CallbackQueryHandler(nav_callback, pattern="^nav_"))
-    app.add_handler(CallbackQueryHandler(choose_callback, pattern="^choose$"))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("search", search_cmd))
 
-    # إعداد Webhook أو Polling بناءً على وجود WEBHOOK_URL
-    if WEBHOOK_URL:
-        # يضبط Webhook تلقائياً عند الانطلاق
-        app.bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
-        app.run_webhook(
-            listen="0.0.0.0", port=PORT, webhook_path=TOKEN
-        )
-    else:
-        app.run_polling()
+    # أوامر المشرف
+    app.add_handler(CommandHandler("broadcast", broadcast))
+
+    # استجابات الأزرار
+    app.add_handler(CallbackQueryHandler(callback_query_handler))
+
+    # عداد بسيط لطلبات المستخدم
+    async def count_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data["requests"] = context.user_data.get("requests", 0) + 1
+
+    app.add_handler(MessageHandler(filters.ALL, count_requests), group=1)
+
+    logger.info("🤖 Searo Bot is running ...")
+    await app.run_polling(close_loop=False)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped.")
